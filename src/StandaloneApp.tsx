@@ -1213,7 +1213,6 @@ function App() {
   const handleCanvasMouseDown = useCallback(
     (e: React.MouseEvent) => {
       if (e.button !== 0) return
-      setContextMenu(null)
       const target = e.target as HTMLElement
       if (
         target.closest('.react-flow__node') ||
@@ -1224,6 +1223,7 @@ function App() {
       ) {
         return
       }
+      setContextMenu(null)
       startCutGesture(e.clientX, e.clientY)
     },
     [startCutGesture],
@@ -1237,6 +1237,53 @@ function App() {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [contextMenu])
+
+  useEffect(() => {
+    if (activePage !== 'canvas') return
+    const handlePaste = async (e: ClipboardEvent) => {
+      const active = document.activeElement
+      if (
+        active &&
+        (active.tagName === 'INPUT' ||
+          active.tagName === 'TEXTAREA' ||
+          (active as HTMLElement).isContentEditable)
+      ) {
+        return
+      }
+      const items = e.clipboardData?.items
+      if (!items) return
+      const imageItems = Array.from(items).filter((item) => item.type.startsWith('image/'))
+      if (imageItems.length === 0) return
+      e.preventDefault()
+      const images: ReferenceImage[] = []
+      for (const item of imageItems) {
+        const file = item.getAsFile()
+        if (!file) continue
+        const dataUrl = await readFileAsDataUrl(file)
+        images.push({
+          id: `pasted-${Date.now()}-${crypto.randomUUID()}`,
+          name: file.name || 'pasted-image',
+          dataUrl,
+        })
+      }
+      if (images.length === 0) return
+      const centerX = window.innerWidth / 2
+      const centerY = (68 + window.innerHeight) / 2
+      const flowPos = rfInstance?.screenToFlowPosition({ x: centerX, y: centerY }) || { x: 0, y: 0 }
+      const id = `reference-${Date.now()}`
+      setNodes((current) => [
+        ...current,
+        {
+          id,
+          type: 'reference',
+          position: flowPos,
+          data: { title: '参考图', images, onChange: updateNodeData },
+        },
+      ])
+    }
+    window.addEventListener('paste', handlePaste)
+    return () => window.removeEventListener('paste', handlePaste)
+  }, [activePage, rfInstance, updateNodeData])
 
   const addPromptNode = () => {
     const id = `prompt-${Date.now()}`
@@ -1571,7 +1618,7 @@ function App() {
           <MiniMap position="bottom-right" pannable zoomable nodeStrokeWidth={3} />
           <Panel position="top-left" className="canvas-help">
             <Sparkles size={16} />
-            左键拖动节点 | 左键划线断开连线 | 右键添加节点 | 中键移动画布
+            左键拖动节点 | 左键划线断开连线 | 右键添加节点 | 中键移动画布 | Ctrl+V 粘贴图片做参考图
           </Panel>
         </ReactFlow>
 
