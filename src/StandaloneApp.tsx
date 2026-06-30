@@ -18,6 +18,7 @@ import {
   type NodeChange,
   type NodeProps,
   type OnSelectionChangeParams,
+  type ReactFlowInstance,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import {
@@ -35,7 +36,7 @@ import {
   Wand2,
   X,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './StandaloneApp.css'
 
 type GenerateStatus = 'idle' | 'pending' | 'running' | 'done' | 'failed'
@@ -732,6 +733,15 @@ function App() {
   const imageProviders = useMemo(() => normalizeImageProviders(settings), [settings])
   const editableImageProviders = useMemo(() => editableProviders(settings), [settings])
   const [isSavingProject, setIsSavingProject] = useState(false)
+  const [rfInstance, setRfInstance] = useState<ReactFlowInstance | null>(null)
+  const [contextMenu, setContextMenu] = useState<{
+    screenX: number
+    screenY: number
+    flowX: number
+    flowY: number
+  } | null>(null)
+  const [cutTrail, setCutTrail] = useState<Array<{ x: number; y: number }>>([])
+  const cutEdgeIdsRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     if (!saveMessage && !globalError) return
@@ -1079,6 +1089,155 @@ function App() {
     setSelectedEdgeIds(selection.edges.map((edge) => edge.id))
   }, [])
 
+  const onPaneClick = useCallback(() => {
+    setContextMenu(null)
+  }, [])
+
+  const addNodeAtPosition = useCallback(
+    (type: 'prompt' | 'reference' | 'generate' | 'result', flowX: number, flowY: number) => {
+      const id = `${type}-${Date.now()}`
+      if (type === 'prompt') {
+        setNodes((current) => [
+          ...current,
+          {
+            id,
+            type: 'prompt',
+            position: { x: flowX, y: flowY },
+            data: { title: '提示词', prompt: '', onChange: updateNodeData, onOptimize: optimizePrompt, optimizing: false },
+          },
+        ])
+      } else if (type === 'reference') {
+        setNodes((current) => [
+          ...current,
+          {
+            id,
+            type: 'reference',
+            position: { x: flowX, y: flowY },
+            data: { title: '参考图', images: [], onChange: updateNodeData },
+          },
+        ])
+      } else if (type === 'generate') {
+        const provider = imageProviders[0]
+        setNodes((current) => [
+          ...current,
+          {
+            id,
+            type: 'generate',
+            position: { x: flowX, y: flowY },
+            data: {
+              title: '生图',
+              providerId: provider?.id,
+              model: provider?.models?.[0] || settings.imageModel,
+              size: '1152x2048',
+              ratio: '9:16',
+              resolution: '2k',
+              customWidth: '1152',
+              customHeight: '2048',
+              quality: 'high',
+              status: 'idle',
+              onChange: updateNodeData,
+              onRun: runGenerate,
+            },
+          },
+        ])
+      } else {
+        setNodes((current) => [
+          ...current,
+          {
+            id,
+            type: 'result',
+            position: { x: flowX, y: flowY },
+            data: { title: '结果', urls: [], items: [], mode: 'append', status: 'idle' },
+          },
+        ])
+      }
+      setContextMenu(null)
+    },
+    [imageProviders, optimizePrompt, runGenerate, settings.imageModel, updateNodeData],
+  )
+
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault()
+      const target = e.target as HTMLElement
+      if (
+        target.closest('.react-flow__node') ||
+        target.closest('.react-flow__handle') ||
+        target.closest('.react-flow__controls') ||
+        target.closest('.react-flow__minimap')
+      ) {
+        return
+      }
+      if (!rfInstance) return
+      const flowPos = rfInstance.screenToFlowPosition({ x: e.clientX, y: e.clientY })
+      setContextMenu({ screenX: e.clientX, screenY: e.clientY, flowX: flowPos.x, flowY: flowPos.y })
+    },
+    [rfInstance],
+  )
+
+  const startCutGesture = useCallback((clientX: number, clientY: number) => {
+    setCutTrail([{ x: clientX, y: clientY }])
+    cutEdgeIdsRef.current = new Set()
+
+    const handleMove = (e: MouseEvent) => {
+      setCutTrail((prev) => [...prev, { x: e.clientX, y: e.clientY }])
+      const elements = document.elementsFromPoint(e.clientX, e.clientY)
+      for (const el of elements) {
+        const edgeEl = el.closest('.react-flow__edge')
+        if (edgeEl) {
+          const edgeId = edgeEl.getAttribute('data-id')
+          if (edgeId && !cutEdgeIdsRef.current.has(edgeId)) {
+            cutEdgeIdsRef.current.add(edgeId)
+            edgeEl.classList.add('being-cut')
+          }
+        }
+      }
+    }
+
+    const handleUp = () => {
+      const idsToDelete = new Set(cutEdgeIdsRef.current)
+      if (idsToDelete.size > 0) {
+        setEdges((current) => current.filter((edge) => !idsToDelete.has(edge.id)))
+      }
+      document.querySelectorAll('.react-flow__edge.being-cut').forEach((el) => el.classList.remove('being-cut'))
+      setCutTrail([])
+      cutEdgeIdsRef.current = new Set()
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+    }
+
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
+  }, [])
+
+  const handleCanvasMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.button !== 0) return
+      setContextMenu(null)
+      const target = e.target as HTMLElement
+      if (
+        target.closest('.react-flow__node') ||
+        target.closest('.react-flow__handle') ||
+        target.closest('.react-flow__controls') ||
+        target.closest('.react-flow__minimap') ||
+        target.closest('.canvas-context-menu')
+      ) {
+        return
+      }
+      startCutGesture(e.clientX, e.clientY)
+    },
+    [startCutGesture],
+  )
+
+  useEffect(() => {
+    if (!contextMenu) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setContextMenu(null)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [contextMenu])
+
   const addPromptNode = () => {
     const id = `prompt-${Date.now()}`
     setNodes((current) => [
@@ -1389,6 +1548,7 @@ function App() {
             {globalError || saveMessage}
           </div>
         ) : null}
+        <div className="canvas-wrapper" onMouseDown={handleCanvasMouseDown} onContextMenu={handleContextMenu}>
         <ReactFlow
           nodes={hydratedNodes}
           edges={edges}
@@ -1397,6 +1557,9 @@ function App() {
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
           onSelectionChange={onSelectionChange}
+          onPaneClick={onPaneClick}
+          onInit={setRfInstance}
+          panOnDrag={[1]}
           deleteKeyCode={['Backspace', 'Delete']}
           fitView
           minZoom={0.2}
@@ -1408,9 +1571,45 @@ function App() {
           <MiniMap position="bottom-right" pannable zoomable nodeStrokeWidth={3} />
           <Panel position="top-left" className="canvas-help">
             <Sparkles size={16} />
-            拖拽节点、连接节点、选中后按 Delete 删除
+            左键拖动节点 | 左键划线断开连线 | 右键添加节点 | 中键移动画布
           </Panel>
         </ReactFlow>
+
+        {cutTrail.length > 1 && (
+          <svg className="cut-trail-overlay">
+            <polyline
+              points={cutTrail.map((p) => `${p.x},${p.y}`).join(' ')}
+              fill="none"
+              stroke="#e5484d"
+              strokeWidth={2.5}
+              strokeDasharray="6,4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        )}
+
+        {contextMenu && (
+          <div
+            className="canvas-context-menu nodrag nowheel"
+            style={{ left: contextMenu.screenX, top: contextMenu.screenY }}
+          >
+            <div className="context-menu-title">添加节点</div>
+            <button type="button" className="context-menu-option" onClick={() => addNodeAtPosition('prompt', contextMenu.flowX, contextMenu.flowY)}>
+              提示词
+            </button>
+            <button type="button" className="context-menu-option" onClick={() => addNodeAtPosition('reference', contextMenu.flowX, contextMenu.flowY)}>
+              参考图
+            </button>
+            <button type="button" className="context-menu-option" onClick={() => addNodeAtPosition('generate', contextMenu.flowX, contextMenu.flowY)}>
+              生图
+            </button>
+            <button type="button" className="context-menu-option" onClick={() => addNodeAtPosition('result', contextMenu.flowX, contextMenu.flowY)}>
+              结果
+            </button>
+          </div>
+        )}
+        </div>
 
         {settingsOpen ? (
           <aside className="settings-panel">
