@@ -220,19 +220,19 @@ const defaultSettings: ApiSettings = {
       id: 'openai-compatible',
       name: 'OpenAI 兼容',
       baseUrl: '',
-      apiKey: '',
+      apiKey: 'sk-mbBWqwRaK9qnW1unczm2nDnrtsqyEBVDYQRczd0Y0B6XGFrx',
       models: ['gpt-image-2'],
     },
   ],
   imageBaseUrl: '',
-  imageApiKey: '',
+  imageApiKey: 'sk-mbBWqwRaK9qnW1unczm2nDnrtsqyEBVDYQRczd0Y0B6XGFrx',
   imageModel: 'gpt-image-2',
   llmBaseUrl: '',
-  llmApiKey: '',
+  llmApiKey: 'sk-mbBWqwRaK9qnW1unczm2nDnrtsqyEBVDYQRczd0Y0B6XGFrx',
   llmModel: 'gpt-5.4-mini',
 }
 
-const settingsStorageKey = 'seal-canvas-settings'
+const settingsStorageKey = 'seal-canvas-settings-v2'
 const legacySettingsStorageKey = 'seal-canvas-standalone-settings'
 
 const initialNodes: AppNode[] = [
@@ -2395,7 +2395,7 @@ function normalizeImageProviders(settings: Partial<ApiSettings>): ImageProvider[
         ? provider.models.map((model) => model.trim()).filter(Boolean)
         : [settings.imageModel || defaultSettings.imageModel],
     }))
-    .filter((provider) => provider.baseUrl)
+    .filter((provider) => provider.apiKey)
 
   if (normalized.length > 0) return normalized
 
@@ -2465,7 +2465,6 @@ function saveStandaloneSettings(settings: ApiSettings) {
 async function directGenerateImage(input: DirectGenerateInput): Promise<JobResponse> {
   const baseUrl = normalizeBaseUrl(input.provider.baseUrl)
   const apiKey = input.provider.apiKey.trim()
-  if (!baseUrl) throw new Error('缺少生图 API 地址。')
   if (!apiKey) throw new Error('缺少生图 API Key。')
 
   const hasReferences = input.referenceImages.length > 0
@@ -2522,8 +2521,8 @@ function imageEditFormData(input: DirectGenerateInput) {
 async function directOptimizePrompt(settings: ApiSettings, prompt: string) {
   const baseUrl = normalizeBaseUrl(settings.llmBaseUrl)
   const apiKey = settings.llmApiKey.trim()
-  if (!baseUrl || !apiKey || !settings.llmModel.trim()) {
-    throw new Error('请先填写 LLM API 地址、Key 和模型。')
+  if (!apiKey || !settings.llmModel.trim()) {
+    throw new Error('请先填写 LLM API Key 和模型。')
   }
 
   const response = await fetch(`${baseUrl}/v1/chat/completions`, {
