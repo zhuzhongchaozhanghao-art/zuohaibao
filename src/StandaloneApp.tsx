@@ -146,6 +146,7 @@ type DirectGenerateInput = {
   size: string
   quality: string
   count?: number
+  ratio?: ImageRatio
   referenceImages: ReferenceImage[]
 }
 
@@ -248,6 +249,21 @@ const qualityLabels: Record<string, string> = {
   medium: '中',
   high: '高',
   auto: '自动',
+}
+
+// 根据用户选择的比例，在 prompt 末尾追加英文约束词，让 API 生成正确方向的图
+const ratioPromptSuffix: Record<ImageRatio, string> = {
+  'Auto': '',
+  '1:1': ' (square format, 1:1 aspect ratio, equal width and height)',
+  '16:9': ' (widescreen landscape orientation, 16:9 aspect ratio, wider than tall)',
+  '9:16': ' (vertical portrait orientation, 9:16 aspect ratio, much taller than wide)',
+  '4:3': ' (landscape orientation, 4:3 aspect ratio, wider than tall)',
+  '3:4': ' (portrait orientation, 3:4 aspect ratio, taller than wide)',
+  '4:5': ' (portrait orientation, 4:5 aspect ratio, taller than wide)',
+  '5:4': ' (landscape orientation, 5:4 aspect ratio, wider than tall)',
+  '2:3': ' (vertical portrait orientation, 2:3 aspect ratio, much taller than wide)',
+  '3:2': ' (landscape orientation, 3:2 aspect ratio, wider than tall)',
+  '21:9': ' (ultrawide landscape orientation, 21:9 aspect ratio, very wide panoramic view)',
 }
 
 const defaultSettings: ApiSettings = {
@@ -1021,6 +1037,7 @@ function App() {
           size: outputSize,
           quality: generateData.quality,
           count: generateData.count ?? 1,
+          ratio: generateData.ratio || ratioFromSize(outputSize),
           referenceImages: workflowInput.referenceImages,
         })
         updateNodeData(generateId, { status: finalJob.status, jobId: finalJob.jobId || '' })
@@ -2060,6 +2077,7 @@ function SimpleGeneratePage({ settings, onOpenHome, onOpenCanvas, onOpenSettings
         prompt: cleanPrompt,
         size: outputSize,
         quality,
+        ratio,
         referenceImages,
       })
       const url = job.resultUrls[0]
@@ -2512,67 +2530,14 @@ function saveStandaloneSettings(settings: ApiSettings) {
   window.localStorage.setItem(settingsStorageKey, JSON.stringify(settings))
 }
 
-/**
- * 将 API 返回的图片裁剪+缩放到精确目标尺寸。
- * API 返回的尺寸不可控（如 941x1672、1122x1402），需要后处理统一。
- * apiSize 是发送给 API 的 size 参数（如 "1024x1536"），实际期望输出是其宽高对调（1536x1024）。
- */
-async function normalizeImageToTargetSize(imageUrl: string, apiSize: string): Promise<string> {
-  const parts = apiSize.split('x')
-  if (parts.length !== 2) return imageUrl
-  // API 参数宽高与期望输出相反
-  const targetW = parseInt(parts[1], 10)
-  const targetH = parseInt(parts[0], 10)
-  if (!targetW || !targetH) return imageUrl
-  // 正方形不需要处理
-  if (targetW === targetH) {
-    // 仍然需要裁剪为正方形
-  }
-
-  const response = await fetch(imageUrl)
-  const blob = await response.blob()
-  const imageBitmap = await createImageBitmap(blob)
-
-  const srcW = imageBitmap.width
-  const srcH = imageBitmap.height
-  const targetRatio = targetW / targetH
-  const srcRatio = srcW / srcH
-
-  let cropX = 0
-  let cropY = 0
-  let cropW = srcW
-  let cropH = srcH
-
-  if (srcRatio > targetRatio + 0.001) {
-    // 源图更宽，裁左右
-    cropW = Math.round(srcH * targetRatio)
-    cropX = Math.round((srcW - cropW) / 2)
-  } else if (srcRatio < targetRatio - 0.001) {
-    // 源图更高，裁上下
-    cropH = Math.round(srcW / targetRatio)
-    cropY = Math.round((srcH - cropH) / 2)
-  }
-
-  const canvas = document.createElement('canvas')
-  canvas.width = targetW
-  canvas.height = targetH
-  const ctx = canvas.getContext('2d')!
-  ctx.imageSmoothingEnabled = true
-  ctx.imageSmoothingQuality = 'high'
-  ctx.drawImage(imageBitmap, cropX, cropY, cropW, cropH, 0, 0, targetW, targetH)
-
-  return new Promise<string>((resolve) => {
-    canvas.toBlob(
-      (b) => resolve(b ? URL.createObjectURL(b) : imageUrl),
-      'image/png',
-    )
-  })
-}
-
 async function directGenerateImage(input: DirectGenerateInput): Promise<JobResponse> {
   const baseUrl = normalizeBaseUrl(input.provider.baseUrl)
   const apiKey = input.provider.apiKey.trim()
   if (!apiKey) throw new Error('缺少生图 API Key。')
+
+  // 在 prompt 末尾追加比例约束词，引导 API 生成正确方向
+  const suffix = ratioPromptSuffix[input.ratio || 'Auto'] || ''
+  const finalPrompt = suffix ? `${input.prompt}${suffix}` : input.prompt
 
   const count = input.count ?? 1
   const allUrls: string[] = []
@@ -2586,7 +2551,7 @@ async function directGenerateImage(input: DirectGenerateInput): Promise<JobRespo
       ? await fetch(endpoint, {
           method: 'POST',
           headers: { Authorization: `Bearer ${apiKey}` },
-          body: imageEditFormData({ ...input, count: 1 }),
+          body: imageEditFormData({ ...input, prompt: finalPrompt, count: 1 }),
         })
       : await fetch(endpoint, {
           method: 'POST',
@@ -2596,7 +2561,7 @@ async function directGenerateImage(input: DirectGenerateInput): Promise<JobRespo
           },
           body: JSON.stringify({
             model: input.model,
-            prompt: input.prompt,
+            prompt: finalPrompt,
             size: input.size,
             quality: input.quality,
             n: 1,
@@ -2629,26 +2594,10 @@ async function directGenerateImage(input: DirectGenerateInput): Promise<JobRespo
     if (!jobId) jobId = body?.id || `direct-${Date.now()}`
   }
 
-  // 后处理：将每张图裁剪+缩放到精确目标尺寸（API 返回尺寸不可控）
-  const normalizedUrls: string[] = []
-  if (input.size && input.size !== 'auto') {
-    for (const url of allUrls) {
-      try {
-        const normalized = await normalizeImageToTargetSize(url, input.size)
-        normalizedUrls.push(normalized)
-      } catch (e) {
-        console.warn('[图片后处理失败，使用原图]', e)
-        normalizedUrls.push(url)
-      }
-    }
-  } else {
-    normalizedUrls.push(...allUrls)
-  }
-
   return {
     jobId,
     status: 'done',
-    resultUrls: normalizedUrls,
+    resultUrls: allUrls,
   }
 }
 
