@@ -161,7 +161,7 @@ type SimpleGeneratePageProps = {
   onOpenSettings: () => void
 }
 
-type ImageRatio = 'Auto' | '1:1' | '9:16' | '3:4' | '4:3' | '16:9'
+type ImageRatio = 'Auto' | '1:1' | '9:16' | '3:4' | '4:3' | '16:9' | '4:5' | '5:4' | '2:3' | '3:2' | '21:9'
 type ImageResolution = '1k' | '2k' | '4k' | 'custom'
 
 const maxTotalPixels = 3840 * 2160
@@ -177,33 +177,66 @@ const ratioOptions: Array<{
   { value: '3:4', label: '3:4 详情', box: { width: 28, height: 36 } },
   { value: '4:3', label: '4:3 横版', box: { width: 38, height: 28 } },
   { value: '16:9', label: '16:9 宽屏', box: { width: 42, height: 24 } },
+  { value: '4:5', label: '4:5 竖版', box: { width: 24, height: 30 } },
+  { value: '5:4', label: '5:4 横版', box: { width: 30, height: 24 } },
+  { value: '2:3', label: '2:3 竖版', box: { width: 20, height: 30 } },
+  { value: '3:2', label: '3:2 横版', box: { width: 30, height: 20 } },
+  { value: '21:9', label: '21:9 超宽屏', box: { width: 42, height: 18 } },
 ]
 
+// gpt-image-2 API only supports: 1024x1024, 1024x1536 (portrait), 1536x1024 (landscape), auto
+// dall-e-3 supports: 1024x1024, 1024x1792 (portrait), 1792x1024 (landscape)
+// We use gpt-image-2 sizes as default since that's the default model
 const sizePresets: Record<Exclude<ImageRatio, 'Auto'>, Record<Exclude<ImageResolution, 'custom'>, string>> = {
   '1:1': {
     '1k': '1024x1024',
-    '2k': '2048x2048',
-    '4k': '2880x2880',
+    '2k': '1024x1024',
+    '4k': '1024x1024',
   },
   '16:9': {
-    '1k': '1024x576',
-    '2k': '2048x1152',
-    '4k': '3840x2160',
+    '1k': '1536x1024',
+    '2k': '1536x1024',
+    '4k': '1536x1024',
   },
   '9:16': {
-    '1k': '576x1024',
-    '2k': '1152x2048',
-    '4k': '2160x3840',
+    '1k': '1024x1536',
+    '2k': '1024x1536',
+    '4k': '1024x1536',
   },
   '4:3': {
-    '1k': '1024x768',
-    '2k': '2048x1536',
-    '4k': '3312x2496',
+    '1k': '1536x1024',
+    '2k': '1536x1024',
+    '4k': '1536x1024',
   },
   '3:4': {
-    '1k': '768x1024',
-    '2k': '1536x2048',
-    '4k': '2496x3312',
+    '1k': '1024x1536',
+    '2k': '1024x1536',
+    '4k': '1024x1536',
+  },
+  '4:5': {
+    '1k': '1024x1536',
+    '2k': '1024x1536',
+    '4k': '1024x1536',
+  },
+  '5:4': {
+    '1k': '1536x1024',
+    '2k': '1536x1024',
+    '4k': '1536x1024',
+  },
+  '2:3': {
+    '1k': '1024x1536',
+    '2k': '1024x1536',
+    '4k': '1024x1536',
+  },
+  '3:2': {
+    '1k': '1536x1024',
+    '2k': '1536x1024',
+    '4k': '1536x1024',
+  },
+  '21:9': {
+    '1k': '1536x1024',
+    '2k': '1536x1024',
+    '4k': '1536x1024',
   },
 }
 
@@ -2771,6 +2804,11 @@ function ratioFromSize(size?: string): ImageRatio {
     ['3:4', 3 / 4],
     ['4:3', 4 / 3],
     ['16:9', 16 / 9],
+    ['4:5', 4 / 5],
+    ['5:4', 5 / 4],
+    ['2:3', 2 / 3],
+    ['3:2', 3 / 2],
+    ['21:9', 21 / 9],
   ]
   return candidates.reduce((best, current) =>
     Math.abs(current[1] - ratio) < Math.abs(best[1] - ratio) ? current : best,
