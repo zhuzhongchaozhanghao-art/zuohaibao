@@ -2512,6 +2512,63 @@ function saveStandaloneSettings(settings: ApiSettings) {
   window.localStorage.setItem(settingsStorageKey, JSON.stringify(settings))
 }
 
+/**
+ * 将 API 返回的图片裁剪+缩放到精确目标尺寸。
+ * API 返回的尺寸不可控（如 941x1672、1122x1402），需要后处理统一。
+ * apiSize 是发送给 API 的 size 参数（如 "1024x1536"），实际期望输出是其宽高对调（1536x1024）。
+ */
+async function normalizeImageToTargetSize(imageUrl: string, apiSize: string): Promise<string> {
+  const parts = apiSize.split('x')
+  if (parts.length !== 2) return imageUrl
+  // API 参数宽高与期望输出相反
+  const targetW = parseInt(parts[1], 10)
+  const targetH = parseInt(parts[0], 10)
+  if (!targetW || !targetH) return imageUrl
+  // 正方形不需要处理
+  if (targetW === targetH) {
+    // 仍然需要裁剪为正方形
+  }
+
+  const response = await fetch(imageUrl)
+  const blob = await response.blob()
+  const imageBitmap = await createImageBitmap(blob)
+
+  const srcW = imageBitmap.width
+  const srcH = imageBitmap.height
+  const targetRatio = targetW / targetH
+  const srcRatio = srcW / srcH
+
+  let cropX = 0
+  let cropY = 0
+  let cropW = srcW
+  let cropH = srcH
+
+  if (srcRatio > targetRatio + 0.001) {
+    // 源图更宽，裁左右
+    cropW = Math.round(srcH * targetRatio)
+    cropX = Math.round((srcW - cropW) / 2)
+  } else if (srcRatio < targetRatio - 0.001) {
+    // 源图更高，裁上下
+    cropH = Math.round(srcW / targetRatio)
+    cropY = Math.round((srcH - cropH) / 2)
+  }
+
+  const canvas = document.createElement('canvas')
+  canvas.width = targetW
+  canvas.height = targetH
+  const ctx = canvas.getContext('2d')!
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
+  ctx.drawImage(imageBitmap, cropX, cropY, cropW, cropH, 0, 0, targetW, targetH)
+
+  return new Promise<string>((resolve) => {
+    canvas.toBlob(
+      (b) => resolve(b ? URL.createObjectURL(b) : imageUrl),
+      'image/png',
+    )
+  })
+}
+
 async function directGenerateImage(input: DirectGenerateInput): Promise<JobResponse> {
   const baseUrl = normalizeBaseUrl(input.provider.baseUrl)
   const apiKey = input.provider.apiKey.trim()
@@ -2572,10 +2629,26 @@ async function directGenerateImage(input: DirectGenerateInput): Promise<JobRespo
     if (!jobId) jobId = body?.id || `direct-${Date.now()}`
   }
 
+  // 后处理：将每张图裁剪+缩放到精确目标尺寸（API 返回尺寸不可控）
+  const normalizedUrls: string[] = []
+  if (input.size && input.size !== 'auto') {
+    for (const url of allUrls) {
+      try {
+        const normalized = await normalizeImageToTargetSize(url, input.size)
+        normalizedUrls.push(normalized)
+      } catch (e) {
+        console.warn('[图片后处理失败，使用原图]', e)
+        normalizedUrls.push(url)
+      }
+    }
+  } else {
+    normalizedUrls.push(...allUrls)
+  }
+
   return {
     jobId,
     status: 'done',
-    resultUrls: allUrls,
+    resultUrls: normalizedUrls,
   }
 }
 
