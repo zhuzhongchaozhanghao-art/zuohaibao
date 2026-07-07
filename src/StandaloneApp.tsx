@@ -60,6 +60,7 @@ type GenerateNodeData = {
   customWidth?: string
   customHeight?: string
   quality: string
+  count?: number
   status: GenerateStatus
   jobId?: string
   error?: string
@@ -144,6 +145,7 @@ type DirectGenerateInput = {
   prompt: string
   size: string
   quality: string
+  count?: number
   referenceImages: ReferenceImage[]
 }
 
@@ -193,50 +195,51 @@ const sizePresets: Record<Exclude<ImageRatio, 'Auto'>, Record<Exclude<ImageResol
     '2k': '1024x1024',
     '4k': '1024x1024',
   },
+  // api.ark717.com 把 size 解释为 height×width（与标准相反），所以横图用 1024x1536，竖图用 1536x1024
   '16:9': {
-    '1k': '1536x1024',
-    '2k': '1536x1024',
-    '4k': '1536x1024',
+    '1k': '1024x1536',
+    '2k': '1024x1536',
+    '4k': '1024x1536',
   },
   '9:16': {
-    '1k': '1024x1536',
-    '2k': '1024x1536',
-    '4k': '1024x1536',
+    '1k': '1536x1024',
+    '2k': '1536x1024',
+    '4k': '1536x1024',
   },
   '4:3': {
-    '1k': '1536x1024',
-    '2k': '1536x1024',
-    '4k': '1536x1024',
+    '1k': '1024x1536',
+    '2k': '1024x1536',
+    '4k': '1024x1536',
   },
   '3:4': {
-    '1k': '1024x1536',
-    '2k': '1024x1536',
-    '4k': '1024x1536',
+    '1k': '1536x1024',
+    '2k': '1536x1024',
+    '4k': '1536x1024',
   },
   '4:5': {
-    '1k': '1024x1536',
-    '2k': '1024x1536',
-    '4k': '1024x1536',
+    '1k': '1536x1024',
+    '2k': '1536x1024',
+    '4k': '1536x1024',
   },
   '5:4': {
-    '1k': '1536x1024',
-    '2k': '1536x1024',
-    '4k': '1536x1024',
-  },
-  '2:3': {
     '1k': '1024x1536',
     '2k': '1024x1536',
     '4k': '1024x1536',
   },
-  '3:2': {
+  '2:3': {
     '1k': '1536x1024',
     '2k': '1536x1024',
     '4k': '1536x1024',
   },
+  '3:2': {
+    '1k': '1024x1536',
+    '2k': '1024x1536',
+    '4k': '1024x1536',
+  },
   '21:9': {
-    '1k': '1536x1024',
-    '2k': '1536x1024',
-    '4k': '1536x1024',
+    '1k': '1024x1536',
+    '2k': '1024x1536',
+    '4k': '1024x1536',
   },
 }
 
@@ -517,6 +520,19 @@ function GenerateNode({ id, data }: NodeProps<Node<GenerateNodeData>>) {
           </div>
         </div>
       ) : null}
+      <div className="compact-field">
+        <select
+          className="nodrag nowheel"
+          value={data.count ?? 1}
+          onChange={(event) => data.onChange(id, { count: Number(event.target.value) })}
+        >
+          {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
+            <option key={n} value={n}>
+              出图 {n} 张
+            </option>
+          ))}
+        </select>
+      </div>
       <div className="quality-row">
         {(['low', 'medium', 'high', 'auto'] as const).map((quality) => (
           <button
@@ -1004,6 +1020,7 @@ function App() {
           prompt: workflowInput.prompt,
           size: outputSize,
           quality: generateData.quality,
+          count: generateData.count ?? 1,
           referenceImages: workflowInput.referenceImages,
         })
         updateNodeData(generateId, { status: finalJob.status, jobId: finalJob.jobId || '' })
@@ -2500,40 +2517,65 @@ async function directGenerateImage(input: DirectGenerateInput): Promise<JobRespo
   const apiKey = input.provider.apiKey.trim()
   if (!apiKey) throw new Error('缺少生图 API Key。')
 
-  const hasReferences = input.referenceImages.length > 0
-  const endpoint = hasReferences ? `${baseUrl}/v1/images/edits` : `${baseUrl}/v1/images/generations`
-  const response = hasReferences
-    ? await fetch(endpoint, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}` },
-        body: imageEditFormData(input),
-      })
-    : await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: input.model,
-          prompt: input.prompt,
-          size: input.size,
-          quality: input.quality,
-          n: 1,
-          response_format: 'url',
-        }),
-      })
+  const count = input.count ?? 1
+  const allUrls: string[] = []
+  let jobId = ''
 
-  const body = await responseJson(response)
-  if (!response.ok) throw new Error(extractApiError(body, '生图失败。'))
+  // API 不支持 n > 1，需要多次请求
+  for (let i = 0; i < count; i++) {
+    const hasReferences = input.referenceImages.length > 0
+    const endpoint = hasReferences ? `${baseUrl}/v1/images/edits` : `${baseUrl}/v1/images/generations`
+    const response = hasReferences
+      ? await fetch(endpoint, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${apiKey}` },
+          body: imageEditFormData({ ...input, count: 1 }),
+        })
+      : await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: input.model,
+            prompt: input.prompt,
+            size: input.size,
+            quality: input.quality,
+            n: 1,
+            response_format: 'url',
+          }),
+        })
 
-  const resultUrls = extractImageUrls(body)
-  if (resultUrls.length === 0) throw new Error('生图接口没有返回图片。')
+    console.log('[生图请求]', {
+      index: i + 1,
+      total: count,
+      endpoint,
+      model: input.model,
+      size: input.size,
+    })
+
+    const body = await responseJson(response)
+    console.log('[生图响应]', {
+      index: i + 1,
+      status: response.status,
+      ok: response.ok,
+      dataLength: body?.data?.length,
+    })
+
+    if (!response.ok) throw new Error(extractApiError(body, `第 ${i + 1} 张生图失败。`))
+
+    const urls = extractImageUrls(body)
+    if (urls.length === 0) throw new Error(`第 ${i + 1} 张生图接口没有返回图片。`)
+
+    allUrls.push(...urls)
+    if (!jobId) jobId = body?.id || `direct-${Date.now()}`
+  }
 
   return {
-    jobId: body?.id || `direct-${Date.now()}`,
+    jobId,
     status: 'done',
-    resultUrls,
+    resultUrls: allUrls,
   }
 }
 
@@ -2543,7 +2585,7 @@ function imageEditFormData(input: DirectGenerateInput) {
   form.set('prompt', input.prompt)
   form.set('size', input.size)
   form.set('quality', input.quality)
-  form.set('n', '1')
+  form.set('n', String(input.count ?? 1))
   form.set('response_format', 'url')
   for (const image of input.referenceImages.slice(0, 10)) {
     form.append('image', dataUrlToFile(image.dataUrl, image.name || 'reference.png'))
@@ -2795,21 +2837,23 @@ function splitSizeValue(size?: string) {
 function ratioFromSize(size?: string): ImageRatio {
   const parts = splitSizeValue(size)
   if (!parts) return '9:16'
-  const width = Number(parts.width)
-  const height = Number(parts.height)
-  const ratio = width / height
+  const w = Number(parts.width)
+  const h = Number(parts.height)
+  // api.ark717.com 把 size 解释为 height×width，所以 sizePresets 中横图用 1024x1536、竖图用 1536x1024
+  // 这里需要按实际存储的 size 字符串来匹配比例
   const candidates: Array<[ImageRatio, number]> = [
-    ['1:1', 1],
-    ['9:16', 9 / 16],
-    ['3:4', 3 / 4],
-    ['4:3', 4 / 3],
-    ['16:9', 16 / 9],
-    ['4:5', 4 / 5],
-    ['5:4', 5 / 4],
-    ['2:3', 2 / 3],
-    ['3:2', 3 / 2],
-    ['21:9', 21 / 9],
+    ['1:1', 1024 / 1024],
+    ['16:9', 1024 / 1536],   // 横图存的是 1024x1536
+    ['9:16', 1536 / 1024],   // 竖图存的是 1536x1024
+    ['4:3', 1024 / 1536],
+    ['3:4', 1536 / 1024],
+    ['4:5', 1536 / 1024],
+    ['5:4', 1024 / 1536],
+    ['2:3', 1536 / 1024],
+    ['3:2', 1024 / 1536],
+    ['21:9', 1024 / 1536],
   ]
+  const ratio = w / h
   return candidates.reduce((best, current) =>
     Math.abs(current[1] - ratio) < Math.abs(best[1] - ratio) ? current : best,
   )[0]
