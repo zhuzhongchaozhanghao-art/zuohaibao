@@ -2565,7 +2565,6 @@ async function directGenerateImage(input: DirectGenerateInput): Promise<JobRespo
             size: input.size,
             quality: input.quality,
             n: 1,
-            response_format: 'url',
           }),
         })
 
@@ -2608,7 +2607,6 @@ function imageEditFormData(input: DirectGenerateInput) {
   form.set('size', input.size)
   form.set('quality', input.quality)
   form.set('n', String(input.count ?? 1))
-  form.set('response_format', 'url')
   for (const image of input.referenceImages.slice(0, 10)) {
     form.append('image', dataUrlToFile(image.dataUrl, image.name || 'reference.png'))
   }
